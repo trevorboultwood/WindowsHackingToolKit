@@ -12,6 +12,7 @@ namespace bio
             std::uintptr_t address() const;
             std::size_t size() const;
             MemoryRegionProtection protection() const;
+            bool test_protection(MemoryRegionProtection protection) const;
         private:
             std::uintptr_t address_;
             std::size_t size_;

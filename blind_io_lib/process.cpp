@@ -5,7 +5,30 @@
 #include<Windows.h>
 #include<stdexcept>
 #include <Psapi.h>
+#include<stddef.h>
+#include<print>
+#include<vector>
+#include "memory_region.h"
+#include "memory_region_protection.h"
+
+namespace{
+    bio::MemoryRegionProtection to_internal(DWORD protection)
+    {
+        switch(protection)
+        {
+            case PAGE_EXECUTE: return bio::MemoryRegionProtection::EXECUTE;
+            case PAGE_READONLY: return bio::MemoryRegionProtection::READ;
+            case PAGE_READWRITE: return bio::MemoryRegionProtection::READ | bio::MemoryRegionProtection::WRITE;
+            case PAGE_EXECUTE_READ: return bio::MemoryRegionProtection::READ | bio::MemoryRegionProtection::EXECUTE;
+            case PAGE_EXECUTE_READWRITE: return bio::MemoryRegionProtection::READ | bio::MemoryRegionProtection::WRITE |bio::MemoryRegionProtection::EXECUTE;
+        }
+        return bio::MemoryRegionProtection::NO_PROTECTION;
+    }
+
+}
+
 namespace bio
+
 {
     Process::Process(std::uint32_t pid)
     :pid_(pid)
@@ -47,6 +70,28 @@ namespace bio
 
         return module_name;
 
+
+    }
+
+
+    std::vector<MemoryRegion> Process::memory_regions() const {
+        std::vector<MemoryRegion> regions{};
+        MEMORY_BASIC_INFORMATION mem_info{};
+        std::byte *addr = 0x0;
+        
+        while(::VirtualQueryEx(handle_, addr, &mem_info, sizeof(mem_info)) != 0)
+        {
+            if(mem_info.State == MEM_COMMIT)
+            {
+                regions.push_back({reinterpret_cast<std::uintptr_t>(mem_info.BaseAddress), mem_info.RegionSize,to_internal( mem_info.Protect)});
+                //std::println("{} {} {}", mem_info.BaseAddress, mem_info.RegionSize, mem_info.Protect);
+            }
+            addr += mem_info.RegionSize;
+
+
+        }
+
+    return regions; 
 
     }
 }

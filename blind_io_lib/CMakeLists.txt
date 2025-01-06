@@ -1,7 +1,10 @@
 add_library(blind_io
 test.cpp
 process_utils.cpp
-process.cpp)
+process.cpp
+memory_region.cpp
+memory_region_protection.cpp
+)
 
 add_library(blind_io::blind_io ALIAS blind_io)
 

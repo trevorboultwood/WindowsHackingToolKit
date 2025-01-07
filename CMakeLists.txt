@@ -16,7 +16,7 @@ FetchContent_GetProperties(googletest)
 
 add_subdirectory(blind_io_lib)
 add_subdirectory(blind_io_cmd)
-add_subdirectory(support_corpus)
+# weve alread built these add_subdirectory(support_corpus)
 
 enable_testing()
 include(CTest)

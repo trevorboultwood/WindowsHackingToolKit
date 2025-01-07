@@ -194,4 +194,42 @@ std::vector<Thread> Process::threads() const
 
     return threads;
 }
+
+std::optional<std::uintptr_t> Process::address_of_function([[maybe_unused]]std::string_view name) const
+{
+    std::vector<HMODULE> modules(1024);
+
+    DWORD bytes_needed = 0u;
+
+    do
+    {
+        modules.resize(modules.size() * 2u);
+        if(::K32EnumProcessModules(impl_->handle,modules.data(), static_cast<DWORD>(modules.size() * sizeof(HMODULE)) , &bytes_needed) == 0)
+        {
+            throw std::runtime_error("failed to get process modules");
+        }
+
+    } while (bytes_needed>= modules.size()*sizeof(HMODULE));
+    modules.resize(bytes_needed / sizeof(HMODULE));
+
+    for(const auto module : modules)
+    {
+        char module_name [MAX_PATH];
+        if(::K32GetModuleFileNameExA(impl_->handle,module, module_name,sizeof(module_name)) == 0)
+        {
+           throw std::runtime_error("failed to get module name");
+        }
+
+        ::MODULEINFO module_info{};
+        if(::K32GetModuleInformation(impl_->handle,module, &module_info, sizeof(module_info)) == 0)
+        {
+            throw std::runtime_error("failed to get module information");
+        }
+        std::println("module name: {} @ {}", module_name, module_info.lpBaseOfDll);
+
+        std::println("VIDEO @ 37.30");
+
+    }
+    return{};
+}
 }

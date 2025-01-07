@@ -11,6 +11,8 @@
 #include <span>
 #include <string>
 #include <vector>
+#include<optional>
+#include <string_view>
 
 #include "memory_region.h"
 #include "thread.h"
@@ -89,6 +91,8 @@ class Process
      *   Collection of threads for the process.
      */
     std::vector<Thread> threads() const;
+
+    std::optional<std::uintptr_t> address_of_function(std::string_view name) const;
 
   private:
     struct implementation;

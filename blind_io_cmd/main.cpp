@@ -12,7 +12,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <thread>
-
+#include<iostream>
 #include "debugger.h"
 #include "process.h"
 #include "process_utils.h"
@@ -21,11 +21,25 @@ using namespace std::literals;
 
 int main()
 {
-    auto procs = bio::find_process("Notepad.exe");
-    assert(procs.size() == 1);
 
-    auto &proc = procs.front();
+    try{
+        auto procs = bio::find_process("hook_test.exe");
+        assert(procs.size() == 1);
+        auto &proc = procs.front();
+        proc.address_of_function("reverse_array");
+    }
+    catch(const std::runtime_error &err)
+    {
+        std::println(std::cerr, "{}", err.what());
+    }
 
+return 0;
+}
+
+
+
+
+/*
     const auto threads = proc.threads();
 
     std::println("{} -> {}", proc.name(), proc.pid());
@@ -58,9 +72,11 @@ int main()
     std::println("0x{:x}", regs.r14);
     std::println("0x{:x}", regs.r15);
 
-
+    std::println("HELLO");
+    proc.address_of_function("not used currently");
     //std::this_thread::sleep_for(5s);
     //dbg.load_library("/tmp/libtest.so");
 
     return 0;
 }
+*/

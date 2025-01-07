@@ -1,33 +1,66 @@
-#include <print>
-#include <stdio.h>
-#include "test.h"
-#include"process_utils.h"
-#include "process.h"
-#include <stdexcept>
-#include<ranges>  
-#include<span>
+////////////////////////////////////////////////////////////////////////////////
+//         Distributed under the Boost Software License, Version 1.0.         //
+//            (See accompanying file LICENSE or copy at                       //
+//                 https://www.boost.org/LICENSE_1_0.txt)                     //
+////////////////////////////////////////////////////////////////////////////////
 
-#include<string_view>
+#include <cassert>
+#include <chrono>
+#include <print>
+#include <ranges>
+#include <span>
+#include <stdexcept>
+#include <string_view>
+#include <thread>
+
+#include "debugger.h"
+#include "process.h"
+#include "process_utils.h"
 
 using namespace std::literals;
 
 int main()
 {
-    std::println("starting 2");
-    for(const auto &proc : bio::find_process("Notepad.exe"))
-    {
-        std::println("{} - > {}", proc.name(), proc.pid());
-        for(const auto &region : proc.memory_regions())
-        {
-            //std::println("0x{:x} 0x{:x} {}", region.address(), region.size(), region.protection());
-            if(region.test_protection(bio::MemoryRegionProtection::READ | bio::MemoryRegionProtection::WRITE))
-            {
-                bio::replace_memory(proc,region,L"vorpal", L"VORPAL",1);
-                
-            }
-        }
+    auto procs = bio::find_process("Notepad.exe");
+    assert(procs.size() == 1);
 
-  }
-  std::println("Finished!");
+    auto &proc = procs.front();
+
+    const auto threads = proc.threads();
+
+    std::println("{} -> {}", proc.name(), proc.pid());
+
+    for (const auto &thread : threads)
+    {
+        std::println("tid: {}", thread.tid());
+    }
+
+    bio::Debugger dbg{std::move(proc)};
+
+
+    const auto regs = dbg.registers(threads.front().tid());
+    std::println("REGISTERS: ");
+    std::println("0x{}", regs.rax);
+    std::println("0x{:x}", regs.rbx);
+    std::println("0x{:x}", regs.rcx);
+    std::println("0x{:x}", regs.rdx);
+    std::println("0x{:x}", regs.rsi);
+    std::println("0x{:x}", regs.rdi);
+    std::println("0x{:x}", regs.rsp);
+    std::println("0x{:x}", regs.rbp);
+    std::println("0x{:x}", regs.rip);
+    std::println("0x{:x}", regs.r8);
+    std::println("0x{:x}", regs.r9);
+    std::println("0x{:x}", regs.r10);
+    std::println("0x{:x}", regs.r11);
+    std::println("0x{:x}", regs.r12);
+    std::println("0x{:x}", regs.r13);
+    std::println("0x{:x}", regs.r14);
+    std::println("0x{:x}", regs.r15);
+
+
+    //std::this_thread::sleep_for(5s);
+    //dbg.load_library("/tmp/libtest.so");
+
     return 0;
 }

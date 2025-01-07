@@ -9,16 +9,19 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <print>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
-
 
 #include <Windows.h>
 
 #include <Psapi.h>
+#include <tlhelp32.h>
 
+#include "auto_release.h"
 #include "memory_region.h"
 #include "memory_region_protection.h"
 
@@ -26,7 +29,7 @@ namespace
 {
 
 /**
- * Helper function to convert a win32 memory protection value into out internal library type.
+ * Helper function to convert a win32 memory protection value into our internal library type.
  *
  * @param protection
  *   Win32 protection value.
@@ -56,19 +59,33 @@ bio::MemoryRegionProtection to_internal(DWORD protection)
 namespace bio
 {
 
-Process::Process(std::uint32_t pid)
-    : pid_(pid)
-    , handle_(::OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_VM_WRITE, FALSE, pid_), ::CloseHandle)
+struct Process::implementation
 {
-    if (!handle_)
+    std::uint32_t pid;
+
+    AutoRelease<HANDLE> handle;
+};
+
+Process::Process(std::uint32_t pid)
+    : impl_(std::make_unique<implementation>())
+{
+    impl_->pid = pid;
+    impl_->handle = AutoRelease<HANDLE>{
+        ::OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_VM_WRITE, FALSE, impl_->pid),
+        ::CloseHandle};
+    if (!impl_->handle)
     {
         throw std::runtime_error("failed to open process");
     }
 }
 
+Process::~Process() = default;
+Process::Process(Process &&) = default;
+Process &Process::operator=(Process &&) = default;
+
 std::uint32_t Process::pid() const
 {
-    return pid_;
+    return impl_->pid;
 }
 
 std::string Process::name() const
@@ -76,14 +93,14 @@ std::string Process::name() const
     HMODULE module{};
     DWORD bytes_needed = 0;
 
-    if (::K32EnumProcessModules(handle_, &module, sizeof(module), &bytes_needed) == 0)
+    if (::K32EnumProcessModules(impl_->handle, &module, sizeof(module), &bytes_needed) == 0)
     {
         throw std::runtime_error("failed to get first module");
     }
 
     std::string module_name(MAX_PATH, '\0');
     const auto chars_written =
-        ::K32GetModuleBaseNameA(handle_, module, module_name.data(), static_cast<DWORD>(module_name.size()));
+        ::K32GetModuleBaseNameA(impl_->handle, module, module_name.data(), static_cast<DWORD>(module_name.size()));
 
     if (chars_written == 0)
     {
@@ -105,7 +122,7 @@ std::vector<MemoryRegion> Process::memory_regions() const
     // keep calling VirtualQueryEx and move the addr each time, this will enumerate all regions
     // we loop until we error, however there is no way to differentiate between an actual error and just reaching the
     // end of the available regions, so return value is a best effort
-    while (::VirtualQueryEx(handle_, addr, &mem_info, sizeof(mem_info)) != 0)
+    while (::VirtualQueryEx(impl_->handle, addr, &mem_info, sizeof(mem_info)) != 0)
     {
         if (mem_info.State == MEM_COMMIT)
         {
@@ -126,7 +143,8 @@ std::vector<std::uint8_t> Process::read(const MemoryRegion &region) const
 {
     std::vector<std::uint8_t> mem(region.size());
 
-    if (::ReadProcessMemory(handle_, reinterpret_cast<void *>(region.address()), mem.data(), mem.size(), nullptr) == 0)
+    if (::ReadProcessMemory(
+            impl_->handle, reinterpret_cast<void *>(region.address()), mem.data(), mem.size(), nullptr) == 0)
     {
         throw std::runtime_error("failed to read memory region");
     }
@@ -138,11 +156,42 @@ void Process::write(const MemoryRegion &region, std::span<const std::uint8_t> da
 {
     assert(data.size() <= region.size());
 
-    if (::WriteProcessMemory(handle_, reinterpret_cast<void *>(region.address()), data.data(), data.size(), nullptr) ==
-        0)
+    if (::WriteProcessMemory(
+            impl_->handle, reinterpret_cast<void *>(region.address()), data.data(), data.size(), nullptr) == 0)
     {
         throw std::runtime_error("failed to write memory");
     }
 }
 
+std::vector<Thread> Process::threads() const
+{
+    std::vector<Thread> threads{};
+
+    // get a snapshot of all running threads
+    AutoRelease<HANDLE> snapshot{::CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, impl_->pid), ::CloseHandle};
+    if (static_cast<HANDLE>(snapshot.get()) == INVALID_HANDLE_VALUE)
+    {
+        throw std::runtime_error("failed to get thread snapshot");
+    }
+
+    ::THREADENTRY32 thread_entry{};
+    thread_entry.dwSize = sizeof(thread_entry);
+
+    // get the first thread
+    if (!::Thread32First(snapshot, &thread_entry))
+    {
+        throw std::runtime_error("failed to get first thread");
+    }
+
+    // loop through all threads searching for the ones that belong to our process
+    do
+    {
+        if (thread_entry.th32OwnerProcessID == impl_->pid)
+        {
+            threads.push_back(Thread{thread_entry.th32ThreadID});
+        }
+    } while (::Thread32Next(snapshot, &thread_entry));
+
+    return threads;
+}
 }

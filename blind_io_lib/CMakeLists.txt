@@ -3,6 +3,8 @@ add_library(blind_io
     memory_region_protection.cpp
     process_utils.cpp
     utils.cpp
+    disassembler.cpp
+    instruction.cpp
 )
 
 add_library(blind_io::blind_io ALIAS blind_io)
@@ -23,3 +25,5 @@ target_include_directories(
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/blind_io_lib/include/blind_io>
     $<INSTALL_INTERFACE:include/blind_io>
 )
+
+target_link_libraries(blind_io PUBLIC capstone)

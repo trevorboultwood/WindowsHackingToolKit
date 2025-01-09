@@ -99,4 +99,53 @@ void replace_memory(
     replace_memory(process, region, std::span{find, N - 1}, std::span{replace, N - 1}, num_occurrences);
 }
 
+
+/**
+ * Read an object from a remote process.
+ *
+ * @param process
+ *   The process to read from.
+ *
+ * @param address
+ *   The address to read from.
+ *
+ * @returns
+ *   The object read from the process.
+ */
+template <class T>
+T read_object(const Process &process, std::uintptr_t address)
+{
+    T obj{};
+    const auto data = process.read(address, sizeof(obj));
+    std::memcpy(&obj, data.data(), sizeof(obj));
+
+    return obj;
+}
+
+/**
+ * Read an array of objects from a remote process.
+ *
+ * @param process
+ *   The process to read from.
+ *
+ * @param address
+ *   The address to read from.
+ *
+ * @param count
+ *   The number of objects to read.
+ *
+ * @returns
+ *   The objects read from the process.
+ */
+template <class T>
+std::vector<T> read_objects(const Process &process, std::uintptr_t address, std::size_t count)
+{
+    std::vector<T> objects(count);
+    const auto data = process.read(address, sizeof(T) * count);
+    std::memcpy(objects.data(), data.data(), sizeof(T) * count);
+
+    return objects;
+}
+
+
 }

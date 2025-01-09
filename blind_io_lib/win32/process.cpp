@@ -6,16 +6,22 @@
 
 #include "process.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <limits>
+#include <locale>
 #include <memory>
+#include <optional>
 #include <print>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
 
+#define NOMINMAX
 #include <Windows.h>
 
 #include <Psapi.h>
@@ -24,6 +30,7 @@
 #include "auto_release.h"
 #include "memory_region.h"
 #include "memory_region_protection.h"
+#include "process_utils.h"
 
 namespace
 {
@@ -54,6 +61,15 @@ bio::MemoryRegionProtection to_internal(DWORD protection)
     return bio::MemoryRegionProtection::NO_PROTECTION;
 }
 
+DWORD to_native(bio::MemoryRegionProtection protection)
+{
+    if(protection == (bio::MemoryRegionProtection::READ | bio::MemoryRegionProtection::WRITE | bio::MemoryRegionProtection::EXECUTE))
+    {
+        return PAGE_EXECUTE_READWRITE;
+    }
+    throw std::runtime_error("unknown protection");
+}
+
 }
 
 namespace bio
@@ -71,7 +87,7 @@ Process::Process(std::uint32_t pid)
 {
     impl_->pid = pid;
     impl_->handle = AutoRelease<HANDLE>{
-        ::OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_VM_WRITE, FALSE, impl_->pid),
+        ::OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION, FALSE, impl_->pid),
         ::CloseHandle};
     if (!impl_->handle)
     {
@@ -141,10 +157,14 @@ std::vector<MemoryRegion> Process::memory_regions() const
 
 std::vector<std::uint8_t> Process::read(const MemoryRegion &region) const
 {
-    std::vector<std::uint8_t> mem(region.size());
+    return read(region.address(), region.size());
+}
 
-    if (::ReadProcessMemory(
-            impl_->handle, reinterpret_cast<void *>(region.address()), mem.data(), mem.size(), nullptr) == 0)
+std::vector<std::uint8_t> Process::read(std::uintptr_t address, std::size_t size) const
+{
+    std::vector<std::uint8_t> mem(size);
+
+    if (::ReadProcessMemory(impl_->handle, reinterpret_cast<void *>(address), mem.data(), mem.size(), nullptr) == 0)
     {
         throw std::runtime_error("failed to read memory region");
     }
@@ -155,13 +175,73 @@ std::vector<std::uint8_t> Process::read(const MemoryRegion &region) const
 void Process::write(const MemoryRegion &region, std::span<const std::uint8_t> data) const
 {
     assert(data.size() <= region.size());
+    write(region.address(), data);
 
+    
+}
+void Process::write(std::uintptr_t address, std::span<const std::uint8_t> data) const
+{
     if (::WriteProcessMemory(
-            impl_->handle, reinterpret_cast<void *>(region.address()), data.data(), data.size(), nullptr) == 0)
+            impl_->handle, reinterpret_cast<void *>(address), data.data(), data.size(), nullptr) == 0)
     {
         throw std::runtime_error("failed to write memory");
     }
 }
+
+
+void Process::set_protection(std::uintptr_t address, MemoryRegionProtection new_protection) const
+{
+    const auto regions = memory_regions();
+    const auto region = std::ranges::find_if(
+        regions,
+        [address](const auto &region)
+        { return std::clamp(address, region.address(), region.address() + region.size()) == address; });
+    if (region == std::ranges::cend(regions))
+    {
+        throw std::runtime_error("address not in any region");
+    }
+    DWORD old_protection{};
+    if (::VirtualProtectEx(
+            impl_->handle,
+            reinterpret_cast<void *>(region->address()),
+            region->size(),
+            to_native(new_protection),
+            &old_protection) == 0)
+    {
+        std::println("{}", ::GetLastError());
+        throw std::runtime_error("failed to set protection");
+    }
+}
+
+MemoryRegion Process::allocate(std::size_t bytes) const
+{
+    const auto address =
+        ::VirtualAllocEx(impl_->handle, nullptr, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (address == nullptr)
+    {
+        throw std::runtime_error("failed to allocate memory");
+    }
+
+    return {
+        reinterpret_cast<std::uintptr_t>(address),
+        bytes,
+        MemoryRegionProtection::READ | MemoryRegionProtection::WRITE | MemoryRegionProtection::EXECUTE};
+}
+
+std::optional<MemoryRegion> Process::allocate(std::uintptr_t address, std::size_t bytes) const
+{
+    const auto alloc_address = ::VirtualAllocEx(
+        impl_->handle, reinterpret_cast<void *>(address), bytes, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+
+    return alloc_address == nullptr
+               ? std::nullopt
+               : std::make_optional<MemoryRegion>(
+                     reinterpret_cast<std::uintptr_t>(alloc_address),
+                     bytes,
+                     MemoryRegionProtection::READ | MemoryRegionProtection::WRITE | MemoryRegionProtection::EXECUTE);
+}
+
+
 
 std::vector<Thread> Process::threads() const
 {
@@ -171,7 +251,7 @@ std::vector<Thread> Process::threads() const
     AutoRelease<HANDLE> snapshot{::CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, impl_->pid), ::CloseHandle};
     if (static_cast<HANDLE>(snapshot.get()) == INVALID_HANDLE_VALUE)
     {
-        throw std::runtime_error("failed to get thread snapshot");
+        throw std::runtime_error("faield to get thread snapshot");
     }
 
     ::THREADENTRY32 thread_entry{};
@@ -195,41 +275,200 @@ std::vector<Thread> Process::threads() const
     return threads;
 }
 
-std::optional<std::uintptr_t> Process::address_of_function([[maybe_unused]]std::string_view name) const
-{
-    std::vector<HMODULE> modules(1024);
 
+void Process::load_library(const std::filesystem::path &path) const
+{
+    const auto path_mem = allocate(8192u);
+    const auto path_str = std::filesystem::absolute(path).string();
+
+    write(path_mem, std::span{reinterpret_cast<const std::uint8_t*> (path_str.data()), path_str.size()} );
+
+    AutoRelease<HANDLE> thread{::CreateRemoteThread(
+        impl_->handle,
+        nullptr,
+        0,
+        reinterpret_cast<LPTHREAD_START_ROUTINE>(::LoadLibraryA),
+        reinterpret_cast<void*>(path_mem.address()),
+        0,
+        nullptr)};
+
+    if(!thread)
+    {
+        throw std::runtime_error("failed to create thread");
+    }
+    
+
+}
+
+
+void Process::set_hook(std::uintptr_t insert_address, std::uintptr_t hook_address) const
+{
+    std::println("installing hook at {:#x} -> {:#x}", insert_address, hook_address);
+
+    const auto max_offset = std::numeric_limits<std::int32_t>::max();
+    const auto max_page_offset = ((max_offset / 4096) * 4096) - (4096 * 2);
+    const auto insert_address_page = (insert_address / 4096) * 4096;
+
+    std::uintptr_t detour_address{};
+
+    for(auto offset =-max_offset; offset < max_page_offset; offset+=4096)
+    {
+        if(const auto alloc = allocate(insert_address_page + offset, 4096u); alloc)
+        {
+            detour_address = alloc->address();
+            break;
+        }
+    }
+    if(detour_address == 0u)
+    {
+        throw std::runtime_error("failed to allocate detour memory");
+    }
+    std::println("allocated detour address at {:#x}", detour_address);
+
+    const std::uint8_t detourcode[] = {
+    0x49, 0xBA,
+    (hook_address >> 0) & 0xFF,
+    (hook_address >> 8) & 0xFF,
+    (hook_address >> 16) & 0xFF,
+    (hook_address >> 24) & 0xFF,
+    (hook_address >> 32) & 0xFF,
+    (hook_address >> 40) & 0xFF,
+    (hook_address >> 48) & 0xFF,
+    (hook_address >> 56) & 0xFF,
+    0x41, 0xFF, 0xE2};
+
+    write(detour_address, detourcode);
+
+
+    detour_address = detour_address - insert_address - 5;
+
+
+    const std::uint8_t hook_code[] = 
+    {0xe9,
+    (detour_address >> 0) & 0xFF,
+    (detour_address >> 8) & 0xFF,
+    (detour_address >> 16) & 0xFF,
+    (detour_address >> 24) & 0xFF
+    };
+
+    write(insert_address, hook_code);
+
+
+}
+
+
+
+std::vector<RemoteFunction> Process::address_of_function(std::string_view name) const
+{
+    std::vector<RemoteFunction> functions{};
+
+    std::vector<HMODULE> modules(1024u);
     DWORD bytes_needed = 0u;
 
+    // enumerate all modules in the process
     do
     {
+        // windows won'tm tell us how many modules are loaded in the process, so we keep trying with larger buffers
+        // until we think we've got them all
         modules.resize(modules.size() * 2u);
-        if(::K32EnumProcessModules(impl_->handle,modules.data(), static_cast<DWORD>(modules.size() * sizeof(HMODULE)) , &bytes_needed) == 0)
+
+        if (::K32EnumProcessModules(
+                impl_->handle, modules.data(), static_cast<DWORD>(modules.size() * sizeof(HMODULE)), &bytes_needed) ==
+            0)
         {
             throw std::runtime_error("failed to get process modules");
         }
+    } while (bytes_needed >= modules.size() * sizeof(HMODULE));
 
-    } while (bytes_needed>= modules.size()*sizeof(HMODULE));
+    // need to resize to the actual number of modules
     modules.resize(bytes_needed / sizeof(HMODULE));
 
-    for(const auto module : modules)
+    // parse all modules and search for our function in their exports
+    for (const auto module : modules)
     {
-        char module_name [MAX_PATH];
-        if(::K32GetModuleFileNameExA(impl_->handle,module, module_name,sizeof(module_name)) == 0)
+        // get the full path of the module
+        char module_name[MAX_PATH];
+        if (::GetModuleFileNameExA(impl_->handle, module, module_name, sizeof(module_name)) == 0)
         {
-           throw std::runtime_error("failed to get module name");
+            throw std::runtime_error("failed to get module name");
         }
 
+        // shroten the module name to just the file name
+        const auto last_slash = std::string_view{module_name}.find_last_of('\\');
+        const std::string module_name_short(std::string_view{module_name}.substr(last_slash + 1));
+
         ::MODULEINFO module_info{};
-        if(::K32GetModuleInformation(impl_->handle,module, &module_info, sizeof(module_info)) == 0)
+        if (::K32GetModuleInformation(impl_->handle, module, &module_info, sizeof(module_info)) == 0)
         {
             throw std::runtime_error("failed to get module information");
         }
-        std::println("module name: {} @ {}", module_name, module_info.lpBaseOfDll);
 
-        std::println("VIDEO @ 37.30");
+        const auto module_start = reinterpret_cast<std::uintptr_t>(module_info.lpBaseOfDll);
 
+        // read the dos header and verify it
+        const auto dos_header = read_object<::IMAGE_DOS_HEADER>(*this, module_start);
+        if (dos_header.e_magic != IMAGE_DOS_SIGNATURE)
+        {
+            throw std::runtime_error("invalid dos header");
+        }
+
+        // read the nt header and verify it
+        const auto nt_image_header = read_object<::IMAGE_NT_HEADERS64>(*this, module_start + dos_header.e_lfanew);
+        if (nt_image_header.Signature != IMAGE_NT_SIGNATURE)
+        {
+            throw std::runtime_error("failed to read nt image header");
+        }
+
+        if (nt_image_header.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+        {
+            throw std::runtime_error("failed to read optional header");
+        }
+
+        // get the address of the module export directory
+        const auto export_directory_virtual_address =
+            nt_image_header.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
+
+        const auto export_directory =
+            read_object<::IMAGE_EXPORT_DIRECTORY>(*this, module_start + export_directory_virtual_address);
+
+        // get the offsets to the various tables needed to resolve function names
+        const auto function_name_table =
+            read_objects<DWORD>(*this, module_start + export_directory.AddressOfNames, export_directory.NumberOfNames);
+        const auto function_address_table = read_objects<DWORD>(
+            *this, module_start + export_directory.AddressOfFunctions, export_directory.NumberOfFunctions);
+        const auto function_ordinal_table = read_objects<WORD>(
+            *this, module_start + export_directory.AddressOfNameOrdinals, export_directory.NumberOfNames);
+
+        // go through each function name entry and resolve the function name itself
+        for (auto index = 0u; const auto function_name_offset : function_name_table)
+        {
+            std::string function_name{};
+
+            // the actual function names are stored contigulously in an array of null terminated strings, so no real
+            // option but to read them characte by character
+            for (;;)
+            {
+                const auto next_char =
+                    read_object<char>(*this, module_start + function_name_offset + function_name.length());
+                if (next_char == '\0')
+                {
+                    break;
+                }
+
+                function_name.push_back(next_char);
+            }
+
+            if (function_name == name)
+            {
+                // do the index to ordinal lookup to address lookup dance in order to get the actual function offset
+                const auto address = module_start + function_address_table[function_ordinal_table[index]];
+                functions.push_back({module_name_short, function_name, address});
+            }
+
+            ++index;
+        }
     }
-    return{};
+
+    return functions;
 }
 }

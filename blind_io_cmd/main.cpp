@@ -22,11 +22,29 @@ using namespace std::literals;
 int main()
 {
 
+    
     try{
         auto procs = bio::find_process("hook_test.exe");
         assert(procs.size() == 1);
         auto &proc = procs.front();
-        proc.address_of_function("reverse_array");
+
+        const std::filesystem::path hook_dll_path{"..\\..\\support_corpus\\win32\\Debug\\hook_message_box.dll"};
+        proc.load_library(hook_dll_path);
+
+        const auto message_box_functions = proc.address_of_function("MessageBoxA");
+        assert(message_box_functions.size() == 1u);
+        const auto message_box_function = message_box_functions.front(); 
+
+
+        const auto hooked_message_box_functions = proc.address_of_function("hooked_MessageBoxA");
+        assert(hooked_message_box_functions.size() == 1u);
+        const auto hooked_message_box_function = hooked_message_box_functions.front(); 
+
+
+        proc.set_protection(message_box_function.address, bio::MemoryRegionProtection::READ | bio::MemoryRegionProtection::WRITE | bio::MemoryRegionProtection::EXECUTE);
+
+        proc.set_hook(message_box_function.address, hooked_message_box_function.address);
+
     }
     catch(const std::runtime_error &err)
     {
@@ -37,7 +55,47 @@ return 0;
 }
 
 
+void loaddll_and_print()
+    {
+            try{
+        auto procs = bio::find_process("hook_test.exe");
+        assert(procs.size() == 1);
+        auto &proc = procs.front();
 
+        const std::filesystem::path hook_dll_path{"..\\..\\support_corpus\\win32\\Debug\\hook_message_box.dll"};
+        proc.load_library(hook_dll_path);
+
+        const auto message_box_functions = proc.address_of_function("MessageBoxA");
+        assert(message_box_functions.size() == 1u);
+
+        const auto message_box_function = message_box_functions.front(); 
+
+
+        proc.set_protection(message_box_function.address, bio::MemoryRegionProtection::READ | bio::MemoryRegionProtection::WRITE | bio::MemoryRegionProtection::EXECUTE);
+
+        //patch test
+        // const std::uint8_t ret_asm[] = {0xc3};
+        // proc.write(message_box_function.address, ret_asm);
+        
+       
+/*
+ std::vector<std::string_view> functions{"reverse_array", "MessageBoxA"};
+        for(const auto &function : functions)
+        {
+            for(const auto eachFunction : proc.address_of_function(function))
+            {
+                std::println("{}!{} @ {:#x}", eachFunction.library_name, eachFunction.name, eachFunction.address);
+            }
+        }
+
+        */
+    }
+    catch(const std::runtime_error &err)
+    {
+        std::println(std::cerr, "{}", err.what());
+    }
+        
+    }
 
 /*
     const auto threads = proc.threads();

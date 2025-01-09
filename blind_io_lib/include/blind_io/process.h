@@ -37,6 +37,13 @@ struct RemoteFunction
     std::uintptr_t address;
 };
 
+struct HookContext
+{
+  std::uintptr_t insert_address;
+  std::uintptr_t hook_address;
+  std::vector<std::uint8_t> oriignal_bytes;
+};
+
 /**
  * This class represents a view onto a running process and provides methods for interacting with it.
  */
@@ -129,8 +136,8 @@ class Process
 
     void load_library(const std::filesystem::path &path) const;
 
-    void set_hook(std::uintptr_t insert_address, std::uintptr_t hook_address) const;
-
+    HookContext set_hook(std::uintptr_t insert_address, std::uintptr_t hook_address) const;
+    void remove_hook(const HookContext &context) const;
     std::vector<RemoteFunction> address_of_function(std::string_view name) const;
 
   private:

@@ -16,6 +16,8 @@
 #include "debugger.h"
 #include "process.h"
 #include "process_utils.h"
+#include<thread>
+#include<chrono>
 
 using namespace std::literals;
 
@@ -43,7 +45,12 @@ int main()
 
         proc.set_protection(message_box_function.address, bio::MemoryRegionProtection::READ | bio::MemoryRegionProtection::WRITE | bio::MemoryRegionProtection::EXECUTE);
 
-        proc.set_hook(message_box_function.address, hooked_message_box_function.address);
+        const auto hook_context = proc.set_hook(message_box_function.address, hooked_message_box_function.address);
+
+        std::println("Sleeping");
+        std::this_thread::sleep_for(5s);
+        std::println("Reverting hook");
+        proc.remove_hook(hook_context);
 
     }
     catch(const std::runtime_error &err)

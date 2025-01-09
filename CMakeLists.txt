@@ -13,6 +13,17 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/google/googletest.git
     GIT_TAG v1.14.0)
 FetchContent_GetProperties(googletest)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(FetchContent_QUIET FALSE)
+
+FetchContent_Declare(
+    capstone
+    GIT_REPOSITORY https://github.com/capstone-engine/capstone
+    GIT_TAG 5.0.1)
+FetchContent_MakeAvailable(capstone)
+
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 
 add_subdirectory(blind_io_lib)
 add_subdirectory(blind_io_cmd)

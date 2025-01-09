@@ -301,7 +301,7 @@ void Process::load_library(const std::filesystem::path &path) const
 }
 
 
-void Process::set_hook(std::uintptr_t insert_address, std::uintptr_t hook_address) const
+HookContext Process::set_hook(std::uintptr_t insert_address, std::uintptr_t hook_address) const
 {
     std::println("installing hook at {:#x} -> {:#x}", insert_address, hook_address);
 
@@ -351,12 +351,17 @@ void Process::set_hook(std::uintptr_t insert_address, std::uintptr_t hook_addres
     (detour_address >> 24) & 0xFF
     };
 
+    const auto original_bytes = read(insert_address, sizeof(hook_code));
+
     write(insert_address, hook_code);
 
-
+    return {insert_address, hook_address, original_bytes};
 }
 
-
+void Process::remove_hook(const HookContext &context) const
+{
+    write(context.insert_address, context.oriignal_bytes);
+}
 
 std::vector<RemoteFunction> Process::address_of_function(std::string_view name) const
 {

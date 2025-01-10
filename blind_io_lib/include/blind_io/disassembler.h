@@ -1,7 +1,9 @@
 #pragma once
 
 #include<memory>
-
+#include <vector>
+#include "instruction.h"
+#include <span>
 
 
 namespace bio
@@ -13,6 +15,7 @@ namespace bio
         Disassembler();
         ~Disassembler();
 
+        std::vector<Instruction> disassemble(std::span<const uint8_t> data) const;
 
 
         private:

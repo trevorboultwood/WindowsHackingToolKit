@@ -18,6 +18,8 @@
 #include "process_utils.h"
 #include<thread>
 #include<chrono>
+#include "disassembler.h"
+#include "instruction.h"
 
 using namespace std::literals;
 
@@ -38,20 +40,32 @@ int main()
         const auto message_box_function = message_box_functions.front(); 
 
 
-        const auto hooked_message_box_functions = proc.address_of_function("hooked_MessageBoxA");
-        assert(hooked_message_box_functions.size() == 1u);
-        const auto hooked_message_box_function = hooked_message_box_functions.front(); 
+        //const auto hooked_message_box_functions = proc.address_of_function("hooked_MessageBoxA");
+        //assert(hooked_message_box_functions.size() == 1u);
+        //const auto hooked_message_box_function = hooked_message_box_functions.front(); 
 
 
         proc.set_protection(message_box_function.address, bio::MemoryRegionProtection::READ | bio::MemoryRegionProtection::WRITE | bio::MemoryRegionProtection::EXECUTE);
 
+        //Read the bytes, use capstone to disasemmble them for later use.
+
+        const auto message_box_asm = proc.read(message_box_function.address, 30);
+        const bio::Disassembler dissemble{};
+        for(const auto &instruction : dissemble.disassemble(message_box_asm))
+        {
+            std::println("{}",instruction);
+        }
+
+        /*
         const auto hook_context = proc.set_hook(message_box_function.address, hooked_message_box_function.address);
 
+        
         std::println("Sleeping");
         std::this_thread::sleep_for(5s);
         std::println("Reverting hook");
         proc.remove_hook(hook_context);
 
+        */
     }
     catch(const std::runtime_error &err)
     {
